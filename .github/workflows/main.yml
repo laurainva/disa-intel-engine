@@ -25,3 +25,12 @@ jobs:
       - name: Run healthcheck
         run: |
           python scripts/healthcheck_usaspending.py
+      - name: Run DISA cyber expiring pull
+        run: |
+          python scripts/disa_cyber_expiring.py
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: disa-cyber-expiring
+          path: output/disa_cyber_expiring.csv
