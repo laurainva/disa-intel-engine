@@ -33,6 +33,7 @@ jobs:
       - name: Show output folder
         run: |
           ls -la
+          ls -la scripts
           ls -la output || true
 
       - name: Upload CSV artifact
