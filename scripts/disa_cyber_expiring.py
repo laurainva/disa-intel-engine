@@ -2,6 +2,8 @@ import csv
 import os
 from datetime import date, timedelta
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 API_URL = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
 
@@ -22,7 +24,6 @@ FIELDS = [
 ]
 
 def _normalize(v):
-    # USAspending sometimes returns objects for PSC/NAICS, etc.
     if isinstance(v, dict):
         if "code" in v and "name" in v:
             return f"{v['code']} - {v['name']}"
@@ -34,7 +35,6 @@ def _normalize(v):
     return "" if v is None else str(v)
 
 def _get_end_date(row):
-    # Prefer your requested label, but fall back to common keys if needed
     return (
         row.get("End Date")
         or row.get("period_of_performance_current_end_date")
@@ -45,7 +45,6 @@ def _get_end_date(row):
     )
 
 def _parse_ymd(s):
-    """Parse YYYY-MM-DD (or ISO-ish) to a date; return None if invalid."""
     if not s:
         return None
     s = str(s).strip()
@@ -56,15 +55,37 @@ def _parse_ymd(s):
     except ValueError:
         return None
 
+def _build_session():
+    # Retries for transient network errors + 5xx + 429
+    retry = Retry(
+        total=8,
+        connect=8,
+        read=8,
+        backoff_factor=1.0,  # 1s, 2s, 4s, ...
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["POST"]),
+        raise_on_status=False,
+        respect_retry_after_header=True,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+
+    s = requests.Session()
+    s.mount("https://", adapter)
+    s.headers.update({
+        "User-Agent": "disa-intel-engine/0.1 (github-actions)",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    })
+    return s
+
 def main():
     start_dt = date.today()
     horizon_days = int(os.getenv("HORIZON_DAYS", "365"))
     end_dt = start_dt + timedelta(days=horizon_days)
 
-    # PSC codes passed from workflow env
     psc_codes = [s.strip() for s in os.getenv("PSC_CODES", "D310").split(",") if s.strip()]
 
-    # DISA filter (award OR funding)
+    # DISA filter (awarding OR funding)
     disa_agency_filters = [
         {"type": "awarding", "tier": "subtier", "name": "Defense Information Systems Agency"},
         {"type": "funding",  "tier": "subtier", "name": "Defense Information Systems Agency"},
@@ -80,25 +101,34 @@ def main():
             "award_type_codes": ["A", "B", "C", "D"],
             "psc_codes": psc_codes,
             "agencies": disa_agency_filters,
-            # NOTE: Intentionally NOT using time_period here.
-            # We filter by End Date locally below.
+            # NOTE: no time_period; we filter by End Date locally
         },
         "fields": FIELDS,
     }
 
     print(f"End Date window: {start_dt.isoformat()} to {end_dt.isoformat()}")
     print(f"PSC codes: {psc_codes}")
-    print("Agency filter (DISA): Defense Information Systems Agency (awarding or funding)")
+    print("Agency filter: Defense Information Systems Agency (awarding or funding)")
+
+    session = _build_session()
 
     all_rows = []
     page = 1
 
     while True:
         body["page"] = page
-        r = requests.post(API_URL, json=body, timeout=60)
-        r.raise_for_status()
-        data = r.json()
 
+        # Use a connect/read timeout tuple (more reliable than a single number)
+        resp = session.post(API_URL, json=body, timeout=(15, 120))
+
+        # If we still got a non-200, print a small diagnostic
+        if resp.status_code != 200:
+            print("Non-200 status:", resp.status_code)
+            # print only first ~300 chars to keep logs readable
+            print("Response snippet:", (resp.text or "")[:300])
+            resp.raise_for_status()
+
+        data = resp.json()
         rows = data.get("results", []) or []
         meta = data.get("page_metadata", {}) or {}
 
@@ -117,15 +147,13 @@ def main():
             break
 
         page += 1
-        if page > 25:  # safety stop
+        if page > 25:
             print("Stopping at 25 pages (safety stop).")
             break
 
-    # Filter locally by End Date window (safe parsing)
     filtered = []
     for row in all_rows:
-        ed_raw = _get_end_date(row)
-        ed_dt = _parse_ymd(ed_raw)
+        ed_dt = _parse_ymd(_get_end_date(row))
         if ed_dt and (start_dt <= ed_dt <= end_dt):
             filtered.append(row)
 
@@ -143,8 +171,8 @@ def main():
     print(f"Wrote: {outpath}")
 
     if len(all_rows) == 0:
-        print("NOTE: API returned 0 rows. If this happens, DISA name matching may differ in USAspending.")
-        print("      Next step would be to use DISA codes instead of name once we confirm them.")
+        print("NOTE: API returned 0 rows. If this persists, DISA name matching may differ in USAspending.")
+        print("      Next step: use subtier codes instead of name once we identify them.")
 
 if __name__ == "__main__":
     main()
