@@ -26,7 +26,10 @@ jobs:
         run: |
           python scripts/healthcheck_usaspending.py
 
-      - name: Run DISA cyber expiring pull
+          - name: Run DISA cyber expiring pull
+        env:
+          HORIZON_DAYS: "365"
+          PSC_CODES: "D310,D311,D302,D399"
         run: |
           python scripts/disa_cyber_expiring.py
 
