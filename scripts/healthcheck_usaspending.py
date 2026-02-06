@@ -14,10 +14,16 @@ def main():
 
     if results:
         first = results[0]
-        print("first_agency_example:", json.dumps({
-            "agency_name": first.get("agency_name"),
-            "toptier_code": first.get("toptier_code")
-        }, indent=2))
+        print(
+            "first_agency_example:",
+            json.dumps(
+                {
+                    "agency_name": first.get("agency_name"),
+                    "toptier_code": first.get("toptier_code"),
+                },
+                indent=2,
+            ),
+        )
 
 if __name__ == "__main__":
     main()
