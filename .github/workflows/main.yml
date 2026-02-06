@@ -38,6 +38,8 @@ jobs:
           ls -la
           ls -la scripts
           ls -la output || true
+          wc -l output/disa_cyber_expiring.csv || true
+          head -n 5 output/disa_cyber_expiring.csv || true
 
       - name: Upload CSV artifact
         uses: actions/upload-artifact@v4
