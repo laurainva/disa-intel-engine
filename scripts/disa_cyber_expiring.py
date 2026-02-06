@@ -38,20 +38,37 @@ def _get_end_date(row):
     return (
         row.get("End Date")
         or row.get("period_of_performance_current_end_date")
+        or row.get("Period of Performance Current End Date")
         or row.get("period_of_performance_potential_end_date")
+        or row.get("Period of Performance Potential End Date")
         or ""
     )
 
+def _parse_ymd(s):
+    """Parse YYYY-MM-DD (or ISO-ish) to a date; return None if invalid."""
+    if not s:
+        return None
+    s = str(s).strip()
+    if len(s) >= 10:
+        s = s[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
 def main():
     start_dt = date.today()
-    horizon_days = int(os.getenv("HORIZON_DAYS", "365"))  # change if you want
+    horizon_days = int(os.getenv("HORIZON_DAYS", "365"))
     end_dt = start_dt + timedelta(days=horizon_days)
 
-    start = start_dt.isoformat()
-    end = end_dt.isoformat()
-
-    # You can pass PSC_CODES="D310,D311,D302" etc via workflow env
+    # PSC codes passed from workflow env
     psc_codes = [s.strip() for s in os.getenv("PSC_CODES", "D310").split(",") if s.strip()]
+
+    # DISA filter (award OR funding)
+    disa_agency_filters = [
+        {"type": "awarding", "tier": "subtier", "name": "Defense Information Systems Agency"},
+        {"type": "funding",  "tier": "subtier", "name": "Defense Information Systems Agency"},
+    ]
 
     body = {
         "subawards": False,
@@ -62,14 +79,16 @@ def main():
         "filters": {
             "award_type_codes": ["A", "B", "C", "D"],
             "psc_codes": psc_codes,
+            "agencies": disa_agency_filters,
             # NOTE: Intentionally NOT using time_period here.
             # We filter by End Date locally below.
         },
         "fields": FIELDS,
     }
 
-    print(f"Query window (End Date): {start} to {end}")
+    print(f"End Date window: {start_dt.isoformat()} to {end_dt.isoformat()}")
     print(f"PSC codes: {psc_codes}")
+    print("Agency filter (DISA): Defense Information Systems Agency (awarding or funding)")
 
     all_rows = []
     page = 1
@@ -80,14 +99,14 @@ def main():
         r.raise_for_status()
         data = r.json()
 
-        rows = data.get("results", [])
+        rows = data.get("results", []) or []
         meta = data.get("page_metadata", {}) or {}
 
         if page == 1:
             print(f"Page 1 results: {len(rows)}")
-            # Optional: print a tiny sample of keys if something looks off
             if rows:
                 print(f"Sample keys: {list(rows[0].keys())[:15]}")
+                print(f"Sample End Date: {_get_end_date(rows[0])}")
 
         if not rows:
             break
@@ -102,11 +121,12 @@ def main():
             print("Stopping at 25 pages (safety stop).")
             break
 
-    # Filter locally by End Date window
+    # Filter locally by End Date window (safe parsing)
     filtered = []
     for row in all_rows:
-        ed = _get_end_date(row)
-        if ed and (start <= ed <= end):
+        ed_raw = _get_end_date(row)
+        ed_dt = _parse_ymd(ed_raw)
+        if ed_dt and (start_dt <= ed_dt <= end_dt):
             filtered.append(row)
 
     os.makedirs("output", exist_ok=True)
@@ -118,9 +138,13 @@ def main():
         for row in filtered:
             w.writerow({k: _normalize(row.get(k, "")) for k in FIELDS})
 
-    print(f"Pulled {len(all_rows)} rows total.")
+    print(f"Pulled {len(all_rows)} rows total from API.")
     print(f"Kept  {len(filtered)} rows in End Date window.")
     print(f"Wrote: {outpath}")
+
+    if len(all_rows) == 0:
+        print("NOTE: API returned 0 rows. If this happens, DISA name matching may differ in USAspending.")
+        print("      Next step would be to use DISA codes instead of name once we confirm them.")
 
 if __name__ == "__main__":
     main()
