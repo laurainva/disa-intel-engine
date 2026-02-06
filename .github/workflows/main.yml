@@ -8,6 +8,7 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,6 +17,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
@@ -28,8 +30,20 @@ jobs:
 
       - name: Run DISA cyber expiring pull
         env:
+          # If you want "expiring by a specific date", set END_DATE (takes precedence over HORIZON_DAYS).
+          # END_DATE: "2026-03-01"
+
+          # Otherwise, pull items with End Date between today and today+HORIZON_DAYS.
           HORIZON_DAYS: "365"
+
+          # Start narrower (D310) then expand. D399 is very broad.
           PSC_CODES: "D310,D311,D302,D399"
+
+          # When set to 1, we try to restrict to DISA at query-time (and also filter locally as a fallback).
+          DISA_ONLY: "1"
+
+          # Safety stop (pages * 100 results/page)
+          MAX_PAGES: "25"
         run: |
           python scripts/disa_cyber_expiring.py
 
@@ -38,8 +52,6 @@ jobs:
           ls -la
           ls -la scripts
           ls -la output || true
-          wc -l output/disa_cyber_expiring.csv || true
-          head -n 5 output/disa_cyber_expiring.csv || true
 
       - name: Upload CSV artifact
         uses: actions/upload-artifact@v4
